@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+
+# Stop the script on errors
+set -e
+
+IMAGE_NAME="noble-server-cloudimg-amd64.img"
+USER_DATA="user-data.yaml"
+SEED_ISO="seed.iso"
+VM_DISK="vm-disk.qcow2"
+VM_NAME="ubuntu-fresh"
+PKG_MANAGER=""
+
+ensure_command() {
+  local command_name="$1"
+  shift
+  local packages=("$@")
+
+  if command -v "$command_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  read -rp "$command_name is not installed. Install it now? [y/N] " answer
+  case "$answer" in
+    [yY]|[eE][sS]|[yY][eE][sS])
+      if [[ -z "$PKG_MANAGER" ]]; then
+        read -rp "Enter your distribution package manager (apt, dnf, pacman, zypper): " PKG_MANAGER
+      fi
+
+      if [[ -z "$PKG_MANAGER" ]]; then
+        echo "Error: no package manager provided."
+        exit 1
+      fi
+
+      case "$PKG_MANAGER" in
+        apt|apt-get)
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+          ;;
+        dnf)
+          sudo dnf install -y "${packages[@]}"
+          ;;
+        pacman)
+          sudo pacman -Sy --noconfirm "${packages[@]}"
+          ;;
+        zypper)
+          sudo zypper --non-interactive install "${packages[@]}"
+          ;;
+        *)
+          echo "Error: unsupported package manager '$PKG_MANAGER'."
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      echo "Error: $command_name is required."
+      exit 1
+      ;;
+  esac
+}
+
+ensure_command wget wget
+ensure_command cloud-localds cloud-image-utils
+ensure_command qemu-img qemu-utils
+ensure_command virt-install virtinst
+ensure_command virsh libvirt-clients
+
+echo "=== 1. Checking the Ubuntu 24.04 Cloud base image ==="
+if [[ ! -f "$IMAGE_NAME" ]]; then
+  echo "Downloading the cloud image..."
+  wget https://cloud-images.ubuntu.com/noble/current/$IMAGE_NAME
+else
+  echo "The cloud image is already present."
+fi
+
+echo "=== 2. Generating the user-data.yaml file ==="
+# Retrieve the local SSH key
+if [[ ! -f ~/.ssh/id_ed25519.pub ]]; then
+  read -rp "~/.ssh/id_ed25519.pub not found. Generate a new SSH key now? [y/N] " answer
+  case "$answer" in
+    [yY]|[yY][eE][sS])
+      mkdir -p ~/.ssh
+      ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+      ;;
+    *)
+      echo "Error: ~/.ssh/id_ed25519.pub not found. Generate one with ssh-keygen."
+      exit 1
+      ;;
+  esac
+fi
+SSH_KEY=$(cat ~/.ssh/id_ed25519.pub)
+
+# Write the file with strict YAML indentation (2 spaces)
+cat >"$USER_DATA" <<EOF
+#cloud-config
+users:
+  - name: bruce
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - $SSH_KEY
+EOF
+
+echo "=== 3. Creating the NoCloud ISO (seed.iso) ==="
+# Ensure the old ISO is cleanly overwritten
+rm -f "$SEED_ISO"
+cloud-localds "$SEED_ISO" "$USER_DATA"
+
+echo "=== 4. Cleaning up the old VM if it exists ==="
+sudo virsh destroy "$VM_NAME" 2>/dev/null || true
+sudo virsh undefine "$VM_NAME" --remove-all-storage 2>/dev/null || true
+rm -f "$VM_DISK"
+
+echo "=== 5. Creating the copy-on-write virtual disk ==="
+qemu-img create -f qcow2 -b "$IMAGE_NAME" -F qcow2 "$VM_DISK" 20G
+
+echo "=== 6. Deploying the VM via Libvirt ==="
+sudo virt-install \
+  --name "$VM_NAME" \
+  --ram 2048 \
+  --vcpus 2 \
+  --disk path="$VM_DISK",format=qcow2 \
+  --disk path="$SEED_ISO",device=cdrom \
+  --os-variant ubuntu24.04 \
+  --network network=default \
+  --noautoconsole \
+  --import
+
+echo "=========================================================="
+echo " VM launched successfully! Configuration is in progress. "
+echo " Wait about 30 seconds before connecting via:            "
+echo "        ssh bruce@<VM_IP>                                 "
+echo "=========================================================="
+sleep 30s
+sudo virsh domiflist "$VM_NAME"
