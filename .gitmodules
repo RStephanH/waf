@@ -1,0 +1,3 @@
+[submodule "waf/app/coreruleset"]
+	path = waf/app/coreruleset
+	url = https://github.com/coreruleset/coreruleset.git
