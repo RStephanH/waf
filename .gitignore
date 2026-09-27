@@ -1,0 +1,12 @@
+# VM images
+*.img
+*.qcow2
+
+# Go build artifacts
+/bin/
+*.test
+*.out
+
+# OS/editor
+.DS_Store
+*.swp
