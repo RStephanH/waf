@@ -79,10 +79,8 @@ Short walkthrough showing the WAF in action:
 4. A SQL injection attempt returning `403 Forbidden`, with the matched
    Coraza/CRS rule visible in the WAF's logs
 
-<!-- Replace with your actual video/GIF once recorded -->
 ![WAF demo](docs/demo.gif)
-<!-- Or a link: [Watch the demo](docs/demo.mp4) -->
 
 ## License
 
-<!-- fill in if applicable -->
+This project is licensed under the [MIT License](LICENSE).
