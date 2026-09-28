@@ -1,57 +1,88 @@
-# Web Application Firewall (WAF) Lab
+# WAF Reverse Proxy
 
-This repo contains the docs and assets for a home lab focused on building and testing a Web Application Firewall (WAF) solution.
+A reverse proxy written in Go, with request inspection powered by
+[Coraza](https://github.com/corazawaf/coraza) (a ModSecurity-compatible
+WAF engine) and the [OWASP Core Rule Set](https://github.com/coreruleset/coreruleset),
+sitting in front of [OWASP Juice Shop](https://owasp.org/www-project-juice-shop/)
+as a demo backend.
 
-## Project Architecture
+## Architecture
 
-This repo is organized into 4 directories:
+```
+Client → wafHandler (Coraza inspection, request phase) → ReverseProxy → Juice Shop
+```
 
-- `ubuntu`: bash script to provision a clean Ubuntu VM (base template)
-- `waf`: script to set up the security solution (nginx + Coraza) on top of the Ubuntu VM
-- `webserver`: script to set up the protected asset, an OWASP Juice Shop server
-- `docs`: narrative documentation, including `journal.md`
+Every incoming request goes through Coraza's phases 0 to 2 (connection,
+URI/headers, request body). If the CRS anomaly score exceeds the
+configured threshold, the request is rejected with a 403 before it
+ever reaches the backend. Otherwise, it's forwarded unchanged to the
+reverse proxy.
 
-## Network Topology
+## Project status
 
-The lab uses two network interfaces per relevant VM:
+- [x] Basic reverse proxy (no inspection)
+- [x] Coraza integration — request-phase inspection (URI, headers, body)
+- [ ] Response-phase inspection (headers/body)
+- [ ] Configuration via file/environment variables (backend URL, port)
+- [ ] Structured audit logging
 
-- **NAT**: for internet access (package installs, updates)
-- **Isolated network**: where the actual attack/defense traffic flows (Kali → WAF → Juice Shop)
+## Requirements
 
-This separation keeps the "battlefield" traffic contained and makes packet capture/analysis cleaner later on.
+- Go 1.26+
+- Docker (to run Juice Shop locally)
 
-## Technology
+## Installation
 
-### Virtualization & Provisioning
+The OWASP CRS ruleset is included as a git submodule — a plain clone
+won't fetch it automatically:
 
-- QEMU with libvirt as the hypervisor environment
-- cloud-init (NoCloud) for VM provisioning
-- Ubuntu as the base OS for all VMs
+```bash
+git clone --recurse-submodules <this-repo-url>
+```
 
-### Role-Specific Technologies
+If you already cloned without that flag:
 
-- **Protected asset**: OWASP Juice Shop. The lab focuses on Layer 7 (HTTP) attacks, so a web app is the natural target.
-- **WAF engine**: [Coraza](https://coraza.io/), an OWASP WAF engine written in Go, used as a drop-in ModSecurity-compatible alternative
-- **Reverse proxy**: nginx, fronted by Coraza via its [SPOA (nginx) connector](https://github.com/corazawaf/coraza-spoa) or the `coraza-caddy`-style embedded approach (final connector choice to be confirmed in `waf/` implementation)
-- **Ruleset**: OWASP Core Rule Set (CRS) — Coraza is CRS-compatible out of the box, so we get standard, battle-tested rules without having to write SecLang from scratch
-- **Attacker host**: Kali Linux
+```bash
+git submodule update --init --recursive
+```
 
-### Why Coraza over ModSecurity
+## Running locally
 
-This lab intentionally chose Coraza (Go) over the more common ModSecurity (C++) for two reasons: it's an actively developed OWASP project, and it reinforces Go as the primary language across this portfolio (see FRED, connectit). ModSecurity remains the more "industry-default" choice and is noted here for context; it may be evaluated later as a comparison exercise.
+```bash
+# Terminal 1: the backend (Juice Shop)
+docker run -p 3000:3000 bkimminich/juice-shop
 
-### Snapshot Strategy
+# Terminal 2: the WAF
+cd waf/app
+go run main.go
+```
 
-Each VM is snapshotted (`virsh snapshot-create-as`) once cleanly provisioned, to allow fast resets between attack simulations without re-running provisioning from scratch.
+The proxy listens on `:8080` and forwards to `http://127.0.0.1:3000`.
 
-## Future Perspective (out of current scope)
+## Testing
 
-The following are not implemented in this iteration due to hardware constraints, but are natural extensions of this lab:
+```bash
+# Normal request — 200
+curl -i http://localhost:8080/
 
-- Centralized log pipeline (e.g. ELK/Suricata-style setup, as used in a separate IDS homelab project)
-- Correlating WAF audit logs with network-level detection
-- Side-by-side comparison against ModSecurity + CRS for the same attack set
+# SQL injection attempt — blocked with a 403
+curl -i "http://localhost:8080/rest/products/search?q=1'%20OR%20'1'='1"
+```
 
-## Documentation
+## Demo
 
-Documentation lives in the `docs` directory. `journal.md` follows a narrative style, tracking the project's progress and decisions as they're made. This README stays a general, structural reference for the repository.
+Short walkthrough showing the WAF in action:
+
+1. Juice Shop running in Docker, in its own terminal pane
+2. The WAF proxy started in a second pane (`go run main.go`)
+3. A normal request returning `200 OK`
+4. A SQL injection attempt returning `403 Forbidden`, with the matched
+   Coraza/CRS rule visible in the WAF's logs
+
+<!-- Replace with your actual video/GIF once recorded -->
+![WAF demo](docs/demo.gif)
+<!-- Or a link: [Watch the demo](docs/demo.mp4) -->
+
+## License
+
+<!-- fill in if applicable -->
